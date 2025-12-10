@@ -1,0 +1,25 @@
+{
+  "name": "dalle3-mask-hack",
+  "version": "1.0.0",
+  "description": "Experimental: Testing pseudo-inpainting with DALL-E 3 using visual masks (colored vs grayscale zones)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node testMaskHack.js",
+    "start": "node index.js"
+  },
+  "keywords": [
+    "dalle3",
+    "openai",
+    "inpainting",
+    "mask",
+    "image-editing",
+    "experiment"
+  ],
+  "author": "eduardocouto",
+  "license": "MIT",
+  "dependencies": {
+    "openai": "^4.72.0",
+    "sharp": "^0.33.5"
+  }
+}
