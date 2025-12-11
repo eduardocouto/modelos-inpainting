@@ -1,24 +1,28 @@
 {
-  "name": "dalle3-mask-hack",
-  "version": "1.0.0",
-  "description": "Experimental: Testing pseudo-inpainting with DALL-E 3 using visual masks (colored vs grayscale zones)",
+  "name": "modelos-inpainting",
+  "version": "2.0.0",
+  "description": "Testes de inpainting com GPT-Image 1 e outros modelos",
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node testMaskHack.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node test.js",
+    "test:batch": "node test.js --batch",
+    "test:masks": "node test.js --masks",
+    "test:create": "node test.js --create-only"
   },
   "keywords": [
-    "dalle3",
+    "gpt-image-1",
     "openai",
     "inpainting",
     "mask",
     "image-editing",
-    "experiment"
+    "ai"
   ],
   "author": "eduardocouto",
   "license": "MIT",
   "dependencies": {
+    "dotenv": "^16.3.1",
     "openai": "^4.72.0",
     "sharp": "^0.33.5"
   }

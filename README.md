@@ -1,104 +1,105 @@
-# DALL-E 3 Mask Hack
+# Modelos Inpainting
 
-Experimental project to test pseudo-inpainting with DALL-E 3 using visual cues instead of traditional binary masks.
+Testes de inpainting com **GPT-Image 1** (gpt-image-1) da OpenAI.
 
-## The Problem
+## GPT-Image 1 vs DALL-E 3
 
-DALL-E 3 doesn't support:
-- Binary masks for inpainting
-- Image editing/variations
-- Traditional inpainting workflows
+| Feature | DALL-E 3 | GPT-Image 1 |
+|---------|----------|-------------|
+| Inpainting nativo | No | **Yes** |
+| Suporte a máscaras | No | **Yes** |
+| Edição de imagens | No | **Yes** |
+| Qualidade | HD | Low/Medium/High |
 
-## The Hack
-
-Instead of binary masks, we use **visual differentiation**:
-
-1. **Grayscale Method**: Convert the area to edit to grayscale, keep the rest in color
-2. **Border Method**: Add a red border around the edit zone + grayscale
-
-Then we prompt DALL-E 3 to "only modify the grayscale/marked areas".
-
-```
-┌─────────────────────────────────┐
-│  COLORED AREA                   │
-│  (keep unchanged)               │
-│         ┌───────────────┐       │
-│         │ GRAYSCALE     │       │
-│         │ (edit this)   │       │
-│         └───────────────┘       │
-│                                 │
-└─────────────────────────────────┘
-```
-
-## Installation
+## Instalacao
 
 ```bash
 npm install
 cp .env.example .env
-# Add your OpenAI API key to .env
+# Adicionar OPENAI_API_KEY ao .env
 ```
 
-## Usage
+## Uso
 
-### Quick Test (creates sample composites)
+### Linha de comando
 
 ```bash
-npm run test -- --composites-only
+node index.js <imagem> <mascara> "<prompt>" [opcoes]
 ```
 
-### Full Test with DALL-E 3
+Exemplo:
+```bash
+node index.js foto.jpg mascara.png "um jardim com flores coloridas"
+node index.js edificio.png telhado_mask.png "paineis solares no telhado" --quality=high
+```
+
+### Opcoes
+
+- `--size=<size>` - Tamanho: 1024x1024, 1536x1024, 1024x1536 (default: auto)
+- `--quality=<q>` - Qualidade: low, medium, high (default: high)
+- `--output=<dir>` - Directorio de output (default: ./output)
+
+### Como modulo
+
+```javascript
+import { inpaint, batchInpaint, createRectMask } from './index.js';
+
+// Inpainting simples
+const result = await inpaint('foto.jpg', 'mascara.png', 'um ceu azul com nuvens');
+
+// Batch - multiplos prompts na mesma imagem
+const results = await batchInpaint('foto.jpg', 'mascara.png', [
+  'ceu azul limpo',
+  'ceu de por do sol',
+  'ceu noturno com estrelas'
+]);
+
+// Criar mascara rectangular
+await createRectMask(1024, 1024, { x: 100, y: 100, w: 300, h: 200 }, 'mascara.png');
+```
+
+## Formato da Mascara
+
+```
+Branco (255) = Area a EDITAR
+Preto (0)    = Area a MANTER
+```
+
+A mascara e automaticamente convertida para o formato que o GPT-Image 1 espera (canal alpha com transparencia).
+
+## Testes
 
 ```bash
-npm run test
+# Teste simples (cria imagens de teste e executa inpainting)
+npm test
+
+# Teste batch (multiplos prompts)
+npm run test:batch
+
+# Apenas criar mascaras de exemplo
+npm run test:masks
+
+# Apenas criar imagens de teste (sem API)
+npm run test:create
 ```
 
-### Custom Image + Mask
+## Funcoes Disponiveis
 
-```bash
-node index.js <image.png> <mask.png> "your edit prompt"
-```
+| Funcao | Descricao |
+|--------|-----------|
+| `inpaint()` | Inpainting com GPT-Image 1 |
+| `batchInpaint()` | Multiplos prompts na mesma imagem |
+| `createRectMask()` | Criar mascara rectangular |
+| `createCircleMask()` | Criar mascara circular |
+| `convertMaskToAlpha()` | Converter mascara B/W para alpha |
+| `prepareImage()` | Preparar imagem para API |
 
-Example:
-```bash
-node index.js building.jpg mask.png "a modern glass facade with solar panels"
-```
+## Custos (Dezembro 2025)
 
-## Mask Format
-
-- **White (255)** = Area to EDIT
-- **Black (0)** = Area to KEEP
-
-## Methods
-
-### Method 1: Grayscale Zone
-The edit area becomes grayscale, rest stays colored.
-
-### Method 2: Red Border + Grayscale
-Adds a visible red border around the edit zone for clearer visual separation.
-
-## How It Works
-
-1. Load original image and mask
-2. Create composite with color/grayscale zones
-3. Send to GPT-4o Vision for image analysis
-4. Use analysis + edit prompt to generate with DALL-E 3
-5. Compare results
-
-## Expected Results
-
-This is an **experiment**. Results may vary:
-
-- ✅ DALL-E 3 might understand the visual cue and edit appropriately
-- ⚠️ DALL-E 3 might regenerate the entire image
-- ❌ DALL-E 3 might ignore the grayscale hint
-
-## Alternatives (if this doesn't work)
-
-For reliable inpainting, use:
-- **DALL-E 2** (supports actual masks)
-- **FLUX Fill Pro** (via Replicate)
-- **Stable Diffusion Inpainting**
-- **GPT-4o Image Generation** (gpt-image-1)
+GPT-Image 1 pricing:
+- Low quality: ~$0.02 por imagem
+- Medium quality: ~$0.04 por imagem
+- High quality: ~$0.08 por imagem
 
 ## License
 

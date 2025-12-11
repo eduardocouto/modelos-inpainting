@@ -1,9 +1,8 @@
 /**
- * DALL-E 3 Mask Hack - Pseudo-Inpainting Experiment
+ * GPT-Image 1 - Native Inpainting
  *
- * Concept: Since DALL-E 3 doesn't support traditional masks,
- * we try a visual hack - converting the area to edit to grayscale
- * and asking DALL-E 3 to only modify the grayscale zone.
+ * Uses OpenAI's gpt-image-1 model with native mask support.
+ * The mask defines which areas to edit (transparent = edit, opaque = keep).
  */
 
 import OpenAI from 'openai';
@@ -20,321 +19,321 @@ const openai = new OpenAI({
 });
 
 /**
- * Creates a composite image with colored zone (keep) and grayscale zone (edit)
- * @param {string} imagePath - Path to original image
+ * Converts a black/white mask to RGBA with transparency
+ * GPT-Image 1 expects: transparent areas = edit, opaque areas = keep
+ *
  * @param {string} maskPath - Path to mask (white = area to edit, black = keep)
- * @param {string} outputPath - Path for output composite image
+ * @param {number} width - Target width
+ * @param {number} height - Target height
+ * @returns {Buffer} - PNG buffer with alpha channel
  */
-export async function createVisualMask(imagePath, maskPath, outputPath) {
-  console.log('Creating visual mask composite...');
+export async function convertMaskToAlpha(maskPath, width, height) {
+  console.log('Converting mask to alpha channel...');
 
-  // Load original image
-  const originalBuffer = await fs.readFile(imagePath);
-  const original = sharp(originalBuffer);
-  const metadata = await original.metadata();
-
-  // Load and process mask
   const maskBuffer = await fs.readFile(maskPath);
-  const mask = sharp(maskBuffer)
-    .resize(metadata.width, metadata.height)
-    .grayscale();
 
-  // Create grayscale version of original
-  const grayscaleBuffer = await sharp(originalBuffer)
-    .grayscale()
-    .toBuffer();
-
-  // Create the composite:
-  // Where mask is white (255) -> show grayscale
-  // Where mask is black (0) -> show original colors
-
-  const maskProcessed = await mask.toBuffer();
-
-  // Use sharp composite with mask
-  const result = await sharp(originalBuffer)
-    .composite([
-      {
-        input: grayscaleBuffer,
-        blend: 'over',
-        // We need to apply the mask to the grayscale layer
-      }
-    ])
-    .toBuffer();
-
-  // Alternative approach: pixel-by-pixel blending using raw buffers
-  const originalRaw = await sharp(originalBuffer)
-    .ensureAlpha()
-    .raw()
-    .toBuffer();
-
-  const grayscaleRaw = await sharp(grayscaleBuffer)
-    .ensureAlpha()
-    .raw()
-    .toBuffer();
-
+  // Get mask as grayscale raw pixels
   const maskRaw = await sharp(maskBuffer)
-    .resize(metadata.width, metadata.height)
+    .resize(width, height)
     .grayscale()
     .raw()
     .toBuffer();
 
-  // Create output buffer
-  const outputBuffer = Buffer.alloc(originalRaw.length);
+  // Create RGBA buffer
+  const rgbaBuffer = Buffer.alloc(width * height * 4);
 
-  for (let i = 0; i < metadata.width * metadata.height; i++) {
-    const maskValue = maskRaw[i] / 255; // 0-1 range
-    const pixelIndex = i * 4; // RGBA
+  for (let i = 0; i < width * height; i++) {
+    const maskValue = maskRaw[i];
+    const pixelIndex = i * 4;
 
-    // Blend: mask=1 (white) -> grayscale, mask=0 (black) -> original
-    outputBuffer[pixelIndex] = Math.round(
-      originalRaw[pixelIndex] * (1 - maskValue) + grayscaleRaw[pixelIndex] * maskValue
-    );
-    outputBuffer[pixelIndex + 1] = Math.round(
-      originalRaw[pixelIndex + 1] * (1 - maskValue) + grayscaleRaw[pixelIndex + 1] * maskValue
-    );
-    outputBuffer[pixelIndex + 2] = Math.round(
-      originalRaw[pixelIndex + 2] * (1 - maskValue) + grayscaleRaw[pixelIndex + 2] * maskValue
-    );
-    outputBuffer[pixelIndex + 3] = 255; // Full opacity
+    // White in mask (255) = transparent (area to edit)
+    // Black in mask (0) = opaque (area to keep)
+    rgbaBuffer[pixelIndex] = 0;     // R
+    rgbaBuffer[pixelIndex + 1] = 0; // G
+    rgbaBuffer[pixelIndex + 2] = 0; // B
+    rgbaBuffer[pixelIndex + 3] = 255 - maskValue; // Alpha: inverted
   }
 
-  // Save result
-  await sharp(outputBuffer, {
-    raw: {
-      width: metadata.width,
-      height: metadata.height,
-      channels: 4
-    }
+  const pngBuffer = await sharp(rgbaBuffer, {
+    raw: { width, height, channels: 4 }
   })
     .png()
-    .toFile(outputPath);
+    .toBuffer();
 
-  console.log(`Visual mask created: ${outputPath}`);
-  return outputPath;
+  return pngBuffer;
 }
 
 /**
- * Sends composite image to DALL-E 3 with instructions to edit grayscale zone
- * @param {string} compositeImagePath - Path to the composite image
- * @param {string} editPrompt - What to change in the grayscale area
- * @param {string} outputDir - Directory for output images
+ * Prepares image for GPT-Image 1 (ensures PNG with alpha)
+ *
+ * @param {string} imagePath - Path to original image
+ * @returns {Object} - { buffer, width, height }
  */
-export async function editWithDalle3(compositeImagePath, editPrompt, outputDir = './output') {
-  console.log('Sending to DALL-E 3...');
+export async function prepareImage(imagePath) {
+  console.log('Preparing image...');
 
-  // Read image and convert to base64
-  const imageBuffer = await fs.readFile(compositeImagePath);
-  const base64Image = imageBuffer.toString('base64');
-  const mimeType = 'image/png';
+  const imageBuffer = await fs.readFile(imagePath);
+  const metadata = await sharp(imageBuffer).metadata();
 
-  // Craft the prompt
-  const fullPrompt = `Look at this image carefully. It has two distinct zones:
-1. COLORED zones - these must remain EXACTLY as they are, do not modify them
-2. GRAYSCALE/BLACK-AND-WHITE zones - these are the areas you should transform
+  // Ensure image is PNG with alpha channel
+  const pngBuffer = await sharp(imageBuffer)
+    .ensureAlpha()
+    .png()
+    .toBuffer();
 
-Your task: Transform ONLY the grayscale/black-and-white areas into: ${editPrompt}
+  return {
+    buffer: pngBuffer,
+    width: metadata.width,
+    height: metadata.height
+  };
+}
 
-Keep the colored areas pixel-perfect identical. Only change the grayscale zones.
-Maintain perfect visual continuity between the zones.`;
+/**
+ * Performs inpainting using GPT-Image 1
+ *
+ * @param {string} imagePath - Path to original image
+ * @param {string} maskPath - Path to mask (white = edit, black = keep)
+ * @param {string} prompt - What to generate in the masked area
+ * @param {Object} options - Additional options
+ * @returns {Object} - Result with output path and metadata
+ */
+export async function inpaint(imagePath, maskPath, prompt, options = {}) {
+  const {
+    outputDir = './output',
+    size = 'auto', // auto, 1024x1024, 1536x1024, 1024x1536
+    quality = 'high', // low, medium, high
+  } = options;
 
-  console.log('Prompt:', fullPrompt);
+  console.log('\n=== GPT-Image 1 Inpainting ===');
+  console.log('Image:', imagePath);
+  console.log('Mask:', maskPath);
+  console.log('Prompt:', prompt);
+
+  // Prepare image
+  const { buffer: imageBuffer, width, height } = await prepareImage(imagePath);
+
+  // Convert mask to alpha channel format
+  const maskBuffer = await convertMaskToAlpha(maskPath, width, height);
+
+  // Save prepared files for debugging
+  await fs.mkdir(outputDir, { recursive: true });
+  await fs.writeFile(path.join(outputDir, 'prepared_image.png'), imageBuffer);
+  await fs.writeFile(path.join(outputDir, 'prepared_mask.png'), maskBuffer);
+
+  console.log('\nSending to GPT-Image 1...');
 
   try {
-    // Method 1: Use GPT-4 Vision to understand + DALL-E 3 to generate
-    // First, analyze the image
-    const analysis = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Describe this image in detail. Note which areas are in full color and which areas are in grayscale/black-and-white. Be very specific about the composition, objects, and their positions.`
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:${mimeType};base64,${base64Image}`
-              }
-            }
-          ]
-        }
-      ],
-      max_tokens: 1000
-    });
+    // Create File objects for the API
+    const imageFile = new File([imageBuffer], 'image.png', { type: 'image/png' });
+    const maskFile = new File([maskBuffer], 'mask.png', { type: 'image/png' });
 
-    const imageDescription = analysis.choices[0].message.content;
-    console.log('\nImage Analysis:', imageDescription);
-
-    // Generate new image with DALL-E 3
-    const generationPrompt = `Create an image based on this description: ${imageDescription}
-
-IMPORTANT MODIFICATION: For the areas that were described as grayscale/black-and-white, replace them with: ${editPrompt}
-
-Keep everything else exactly as described. Maintain the same composition, perspective, and style.`;
-
-    console.log('\nGeneration prompt:', generationPrompt);
-
-    const response = await openai.images.generate({
-      model: 'dall-e-3',
-      prompt: generationPrompt,
+    const response = await openai.images.edit({
+      model: 'gpt-image-1',
+      image: imageFile,
+      mask: maskFile,
+      prompt: prompt,
       n: 1,
-      size: '1024x1024',
-      quality: 'hd',
-      style: 'natural'
+      size: size === 'auto' ? undefined : size,
+      quality: quality,
     });
 
-    const imageUrl = response.data[0].url;
-    const revisedPrompt = response.data[0].revised_prompt;
+    // Handle response - can be URL or base64
+    const imageData = response.data[0];
+    let resultBuffer;
 
-    console.log('\nRevised prompt by DALL-E:', revisedPrompt);
-    console.log('Image URL:', imageUrl);
+    if (imageData.url) {
+      console.log('Downloading result from URL...');
+      const imageResponse = await fetch(imageData.url);
+      const arrayBuffer = await imageResponse.arrayBuffer();
+      resultBuffer = Buffer.from(arrayBuffer);
+    } else if (imageData.b64_json) {
+      console.log('Decoding base64 result...');
+      resultBuffer = Buffer.from(imageData.b64_json, 'base64');
+    }
 
-    // Download and save the result
-    await fs.mkdir(outputDir, { recursive: true });
-    const outputPath = path.join(outputDir, `result_${Date.now()}.png`);
-
-    const imageResponse = await fetch(imageUrl);
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    await fs.writeFile(outputPath, Buffer.from(arrayBuffer));
+    // Save result
+    const timestamp = Date.now();
+    const outputPath = path.join(outputDir, `inpaint_result_${timestamp}.png`);
+    await fs.writeFile(outputPath, resultBuffer);
 
     console.log(`\nResult saved to: ${outputPath}`);
 
     return {
       outputPath,
-      imageUrl,
-      revisedPrompt,
-      imageDescription
+      revisedPrompt: imageData.revised_prompt,
+      width,
+      height
     };
 
   } catch (error) {
     console.error('Error:', error.message);
+    if (error.response) {
+      console.error('API Response:', error.response.data);
+    }
     throw error;
   }
 }
 
 /**
- * Alternative method: Add visible markers/borders to the edit zone
+ * Batch inpainting - multiple prompts on same image/mask
+ *
+ * @param {string} imagePath - Path to original image
+ * @param {string} maskPath - Path to mask
+ * @param {string[]} prompts - Array of prompts to try
+ * @param {Object} options - Additional options
+ * @returns {Object[]} - Array of results
  */
-export async function createMarkedMask(imagePath, maskPath, outputPath) {
-  console.log('Creating marked mask with red border...');
+export async function batchInpaint(imagePath, maskPath, prompts, options = {}) {
+  console.log(`\n=== Batch Inpainting (${prompts.length} variations) ===`);
 
-  const originalBuffer = await fs.readFile(imagePath);
-  const original = sharp(originalBuffer);
-  const metadata = await original.metadata();
+  const results = [];
 
-  const maskBuffer = await fs.readFile(maskPath);
-
-  // Create edge detection on mask for red border
-  const maskEdge = await sharp(maskBuffer)
-    .resize(metadata.width, metadata.height)
-    .grayscale()
-    .convolve({
-      width: 3,
-      height: 3,
-      kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1]
-    })
-    .threshold(50)
-    .toBuffer();
-
-  // Process buffers
-  const originalRaw = await sharp(originalBuffer)
-    .ensureAlpha()
-    .raw()
-    .toBuffer();
-
-  const grayscaleRaw = await sharp(originalBuffer)
-    .grayscale()
-    .ensureAlpha()
-    .raw()
-    .toBuffer();
-
-  const maskRaw = await sharp(maskBuffer)
-    .resize(metadata.width, metadata.height)
-    .grayscale()
-    .raw()
-    .toBuffer();
-
-  const edgeRaw = await sharp(maskEdge)
-    .resize(metadata.width, metadata.height)
-    .raw()
-    .toBuffer();
-
-  const outputBuffer = Buffer.alloc(originalRaw.length);
-
-  for (let i = 0; i < metadata.width * metadata.height; i++) {
-    const maskValue = maskRaw[i] / 255;
-    const edgeValue = edgeRaw[i] / 255;
-    const pixelIndex = i * 4;
-
-    if (edgeValue > 0.5) {
-      // Red border
-      outputBuffer[pixelIndex] = 255;     // R
-      outputBuffer[pixelIndex + 1] = 0;   // G
-      outputBuffer[pixelIndex + 2] = 0;   // B
-    } else {
-      // Blend original/grayscale
-      outputBuffer[pixelIndex] = Math.round(
-        originalRaw[pixelIndex] * (1 - maskValue) + grayscaleRaw[pixelIndex] * maskValue
-      );
-      outputBuffer[pixelIndex + 1] = Math.round(
-        originalRaw[pixelIndex + 1] * (1 - maskValue) + grayscaleRaw[pixelIndex + 1] * maskValue
-      );
-      outputBuffer[pixelIndex + 2] = Math.round(
-        originalRaw[pixelIndex + 2] * (1 - maskValue) + grayscaleRaw[pixelIndex + 2] * maskValue
-      );
+  for (let i = 0; i < prompts.length; i++) {
+    console.log(`\n--- Variation ${i + 1}/${prompts.length} ---`);
+    try {
+      const result = await inpaint(imagePath, maskPath, prompts[i], {
+        ...options,
+        outputDir: options.outputDir || './output'
+      });
+      results.push({ prompt: prompts[i], ...result, success: true });
+    } catch (error) {
+      results.push({ prompt: prompts[i], error: error.message, success: false });
     }
-    outputBuffer[pixelIndex + 3] = 255;
   }
 
-  await sharp(outputBuffer, {
-    raw: {
-      width: metadata.width,
-      height: metadata.height,
-      channels: 4
+  return results;
+}
+
+/**
+ * Creates a simple rectangular mask
+ *
+ * @param {number} width - Image width
+ * @param {number} height - Image height
+ * @param {Object} rect - { x, y, w, h } rectangle to mask
+ * @param {string} outputPath - Path to save mask
+ */
+export async function createRectMask(width, height, rect, outputPath) {
+  console.log('Creating rectangular mask...');
+
+  const pixels = Buffer.alloc(width * height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+
+      if (x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h) {
+        pixels[i] = 255; // White = edit
+      } else {
+        pixels[i] = 0;   // Black = keep
+      }
     }
+  }
+
+  await sharp(pixels, {
+    raw: { width, height, channels: 1 }
   })
     .png()
     .toFile(outputPath);
 
-  console.log(`Marked mask created: ${outputPath}`);
+  console.log(`Mask saved to: ${outputPath}`);
+  return outputPath;
+}
+
+/**
+ * Creates a circular mask
+ *
+ * @param {number} width - Image width
+ * @param {number} height - Image height
+ * @param {Object} circle - { cx, cy, radius } circle to mask
+ * @param {string} outputPath - Path to save mask
+ */
+export async function createCircleMask(width, height, circle, outputPath) {
+  console.log('Creating circular mask...');
+
+  const pixels = Buffer.alloc(width * height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      const dist = Math.sqrt((x - circle.cx) ** 2 + (y - circle.cy) ** 2);
+
+      if (dist <= circle.radius) {
+        pixels[i] = 255; // White = edit
+      } else {
+        pixels[i] = 0;   // Black = keep
+      }
+    }
+  }
+
+  await sharp(pixels, {
+    raw: { width, height, channels: 1 }
+  })
+    .png()
+    .toFile(outputPath);
+
+  console.log(`Mask saved to: ${outputPath}`);
   return outputPath;
 }
 
 // CLI usage
-if (process.argv[1].includes('index.js')) {
+const isMainModule = process.argv[1]?.includes('index.js') || process.argv[1]?.includes('index.mjs');
+
+if (isMainModule) {
   const args = process.argv.slice(2);
 
   if (args.length < 3) {
     console.log(`
-DALL-E 3 Mask Hack - Pseudo-Inpainting Experiment
+GPT-Image 1 - Native Inpainting
 
 Usage:
-  node index.js <image> <mask> "<edit prompt>"
+  node index.js <image> <mask> "<prompt>" [options]
+
+Arguments:
+  image    - Path to the original image (PNG, JPG, etc.)
+  mask     - Path to the mask image (white = edit, black = keep)
+  prompt   - What to generate in the masked area
+
+Options:
+  --size=<size>      - Output size: 1024x1024, 1536x1024, 1024x1536 (default: auto)
+  --quality=<q>      - Quality: low, medium, high (default: high)
+  --output=<dir>     - Output directory (default: ./output)
 
 Example:
-  node index.js photo.jpg mask.png "a modern glass building"
+  node index.js photo.jpg mask.png "a beautiful garden with flowers"
+  node index.js building.png roof_mask.png "solar panels on the roof" --quality=high
 
-The mask should be:
-  - White (255) = area to edit
-  - Black (0) = area to keep
+Mask format:
+  - White (255) = area to EDIT/REPLACE
+  - Black (0) = area to KEEP unchanged
     `);
     process.exit(1);
   }
 
-  const [imagePath, maskPath, editPrompt] = args;
+  // Parse arguments
+  const imagePath = args[0];
+  const maskPath = args[1];
+  const prompt = args[2];
 
-  // Create composite
-  const compositePath = './output/composite.png';
-  await fs.mkdir('./output', { recursive: true });
+  const options = {};
+  for (const arg of args.slice(3)) {
+    if (arg.startsWith('--size=')) options.size = arg.split('=')[1];
+    if (arg.startsWith('--quality=')) options.quality = arg.split('=')[1];
+    if (arg.startsWith('--output=')) options.outputDir = arg.split('=')[1];
+  }
 
-  await createVisualMask(imagePath, maskPath, compositePath);
+  // Run inpainting
+  try {
+    const result = await inpaint(imagePath, maskPath, prompt, options);
 
-  // Send to DALL-E 3
-  const result = await editWithDalle3(compositePath, editPrompt);
-
-  console.log('\n=== EXPERIMENT COMPLETE ===');
-  console.log('Composite image:', compositePath);
-  console.log('Result image:', result.outputPath);
+    console.log('\n=== INPAINTING COMPLETE ===');
+    console.log('Input image:', imagePath);
+    console.log('Mask:', maskPath);
+    console.log('Result:', result.outputPath);
+    if (result.revisedPrompt) {
+      console.log('Revised prompt:', result.revisedPrompt);
+    }
+  } catch (error) {
+    console.error('\nFailed:', error.message);
+    process.exit(1);
+  }
 }
